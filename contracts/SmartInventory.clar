@@ -159,3 +159,201 @@
     )
 )
 
+(define-map batch-orders 
+    { batch-id: uint }
+    {
+        order-ids: (list 50 uint),
+        status: (string-ascii 20),
+        timestamp: uint
+    }
+)
+
+(define-data-var batch-counter uint u0)
+
+(define-public (create-batch-order (order-list (list 50 uint)))
+    (let ((new-batch-id (+ (var-get batch-counter) u1)))
+        (asserts! (is-eq tx-sender contract-owner) err-not-authorized)
+        (map-set batch-orders
+            { batch-id: new-batch-id }
+            {
+                order-ids: order-list,
+                status: "pending",
+                timestamp: stacks-block-height
+            }
+        )
+        (var-set batch-counter new-batch-id)
+        (ok new-batch-id)
+    )
+)
+
+
+(define-map categories
+    { category-id: uint }
+    {
+        name: (string-ascii 50),
+        description: (string-ascii 100)
+    }
+)
+
+(define-data-var category-counter uint u0)
+
+(define-public (add-category (name (string-ascii 50)) (description (string-ascii 100)))
+    (let ((new-category-id (+ (var-get category-counter) u1)))
+        (asserts! (is-eq tx-sender contract-owner) err-not-authorized)
+        (map-set categories
+            { category-id: new-category-id }
+            {
+                name: name,
+                description: description
+            }
+        )
+        (var-set category-counter new-category-id)
+        (ok new-category-id)
+    )
+)
+
+
+(define-map price-history
+    { item-id: uint, timestamp: uint }
+    { price: uint }
+)
+
+(define-public (update-item-price (item-id uint) (new-price uint))
+    (let ((item (unwrap! (map-get? inventory {item-id: item-id}) err-item-not-found)))
+        (asserts! (is-eq tx-sender contract-owner) err-not-authorized)
+        (map-set price-history
+            { item-id: item-id, timestamp: stacks-block-height }
+            { price: new-price }
+        )
+        (map-set inventory
+            {item-id: item-id}
+            (merge item { price: new-price })
+        )
+        (ok true)
+    )
+)
+
+(define-map quality-checks
+    { check-id: uint }
+    {
+        item-id: uint,
+        inspector: principal,
+        status: (string-ascii 20),
+        notes: (string-ascii 100),
+        timestamp: uint
+    }
+)
+
+(define-data-var quality-check-counter uint u0)
+
+(define-public (record-quality-check (item-id uint) (status (string-ascii 20)) (notes (string-ascii 100)))
+    (let ((new-check-id (+ (var-get quality-check-counter) u1)))
+        (map-set quality-checks
+            { check-id: new-check-id }
+            {
+                item-id: item-id,
+                inspector: tx-sender,
+                status: status,
+                notes: notes,
+                timestamp: stacks-block-height
+            }
+        )
+        (var-set quality-check-counter new-check-id)
+        (ok new-check-id)
+    )
+)
+
+
+(define-map returns
+    { return-id: uint }
+    {
+        order-id: uint,
+        reason: (string-ascii 50),
+        quantity: uint,
+        status: (string-ascii 20),
+        timestamp: uint
+    }
+)
+
+(define-data-var return-counter uint u0)
+
+(define-public (process-return (order-id uint) (quantity uint) (reason (string-ascii 50)))
+    (let 
+        (
+            (new-return-id (+ (var-get return-counter) u1))
+            (order (unwrap! (get-order order-id) err-item-not-found))
+        )
+        (map-set returns
+            { return-id: new-return-id }
+            {
+                order-id: order-id,
+                reason: reason,
+                quantity: quantity,
+                status: "pending",
+                timestamp: stacks-block-height
+            }
+        )
+        (var-set return-counter new-return-id)
+        (ok new-return-id)
+    )
+)
+
+
+(define-map alerts
+    { alert-id: uint }
+    {
+        item-id: uint,
+        alert-type: (string-ascii 20),
+        message: (string-ascii 100),
+        status: (string-ascii 20),
+        timestamp: uint
+    }
+)
+
+(define-data-var alert-counter uint u0)
+
+(define-public (create-alert (item-id uint) (alert-type (string-ascii 20)) (message (string-ascii 100)))
+    (let ((new-alert-id (+ (var-get alert-counter) u1)))
+        (map-set alerts
+            { alert-id: new-alert-id }
+            {
+                item-id: item-id,
+                alert-type: alert-type,
+                message: message,
+                status: "active",
+                timestamp: stacks-block-height
+            }
+        )
+        (var-set alert-counter new-alert-id)
+        (ok new-alert-id)
+    )
+)
+
+
+(define-map bulk-operations
+    { operation-id: uint }
+    {
+        operation-type: (string-ascii 20),
+        items: (list 50 uint),
+        status: (string-ascii 20),
+        timestamp: uint
+    }
+)
+
+(define-data-var operation-counter uint u0)
+
+(define-public (create-bulk-operation (op-type (string-ascii 20)) (item-list (list 50 uint)))
+    (let ((new-operation-id (+ (var-get operation-counter) u1)))
+        (map-set bulk-operations
+            { operation-id: new-operation-id }
+            {
+                operation-type: op-type,
+                items: item-list,
+                status: "pending",
+                timestamp: stacks-block-height
+            }
+        )
+        (var-set operation-counter new-operation-id)
+        (ok new-operation-id)
+    )
+)
