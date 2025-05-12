@@ -436,3 +436,79 @@
 (define-read-only (calculate-avg-order-size (item-id uint))
     (default-to u0 (some u10))
 )
+
+
+(define-map reorder-settings
+    { item-id: uint }
+    {
+        lead-time-days: uint,
+        max-stock: uint,
+        auto-reorder: bool,
+        last-reorder: uint,
+        reorder-quantity: uint
+    }
+)
+
+(define-map reorder-queue
+    { queue-id: uint }
+    {
+        item-id: uint,
+        quantity: uint,
+        supplier-id: uint,
+        status: (string-ascii 20),
+        created-at: uint
+    }
+)
+
+(define-data-var reorder-queue-counter uint u0)
+
+(define-public (configure-reorder-settings 
+    (item-id uint) 
+    (lead-time uint) 
+    (max-stock uint) 
+    (auto-reorder bool)
+    (reorder-quantity uint)
+)
+    (begin
+        (asserts! (is-eq tx-sender contract-owner) err-not-authorized)
+        (asserts! (map-set reorder-settings
+            { item-id: item-id }
+            {
+                lead-time-days: lead-time,
+                max-stock: max-stock,
+                auto-reorder: auto-reorder,
+                last-reorder: u0,
+                reorder-quantity: reorder-quantity
+            }
+        ) err-item-exists)
+        (ok true)
+    )
+)
+
+(define-public (check-and-reorder (item-id uint))
+    (let 
+        (
+            (item (unwrap! (get-item item-id) err-item-not-found))
+            (settings (unwrap! (map-get? reorder-settings {item-id: item-id}) err-item-not-found))
+            (new-queue-id (+ (var-get reorder-queue-counter) u1))
+        )
+        (asserts! (get auto-reorder settings) err-not-authorized)
+        (asserts! (needs-restock item-id) err-invalid-quantity)
+        (map-set reorder-queue
+            { queue-id: new-queue-id }
+            {
+                item-id: item-id,
+                quantity: (get reorder-quantity settings),
+                supplier-id: (get supplier-id item),
+                status: "pending",
+                created-at: stacks-block-height
+            }
+        )
+        (var-set reorder-queue-counter new-queue-id)
+        (ok new-queue-id)
+    )
+)
+
+(define-read-only (get-pending-reorders)
+    (ok (var-get reorder-queue-counter))
+)
