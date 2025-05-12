@@ -357,3 +357,82 @@
         (ok new-operation-id)
     )
 )
+
+
+(define-map bundles
+    { bundle-id: uint }
+    {
+        name: (string-ascii 50),
+        items: (list 10 uint),
+        quantities: (list 10 uint),
+        bundle-price: uint,
+        active: bool
+    }
+)
+
+(define-data-var bundle-counter uint u0)
+
+(define-public (create-bundle (name (string-ascii 50)) (items (list 10 uint)) (quantities (list 10 uint)) (bundle-price uint))
+    (let ((new-bundle-id (+ (var-get bundle-counter) u1)))
+        (asserts! (is-eq tx-sender contract-owner) err-not-authorized)
+        (map-set bundles
+            { bundle-id: new-bundle-id }
+            {
+                name: name,
+                items: items,
+                quantities: quantities,
+                bundle-price: bundle-price,
+                active: true
+            }
+        )
+        (var-set bundle-counter new-bundle-id)
+        (ok new-bundle-id)
+    )
+)
+
+
+
+
+(define-map inventory-metrics
+    { item-id: uint }
+    {
+        total-sales: uint,
+        restock-frequency: uint,
+        avg-order-size: uint,
+        last-calculated: uint
+    }
+)
+
+(define-public (update-metrics (item-id uint))
+    (let 
+        (
+            (current-metrics (default-to 
+                { total-sales: u0, restock-frequency: u0, avg-order-size: u0, last-calculated: u0 }
+                (map-get? inventory-metrics {item-id: item-id})))
+        )
+        (asserts! (is-eq tx-sender contract-owner) err-not-authorized)
+        (map-set inventory-metrics
+            { item-id: item-id }
+            {
+                total-sales: (+ (get total-sales current-metrics) u1),
+                restock-frequency: (calculate-restock-frequency item-id),
+                avg-order-size: (calculate-avg-order-size item-id),
+                last-calculated: stacks-block-height
+            }
+        )
+        (ok true)
+    )
+)
+
+(define-read-only (calculate-restock-frequency (item-id uint))
+    (let ((item (unwrap! (get-item item-id) u0)))
+        (if (needs-restock item-id)
+            (+ u1 u0)
+            u0
+        )
+    )
+)
+
+(define-read-only (calculate-avg-order-size (item-id uint))
+    (default-to u0 (some u10))
+)
