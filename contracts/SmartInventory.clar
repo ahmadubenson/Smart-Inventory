@@ -14,6 +14,45 @@
 (define-data-var total-items uint u0)
 (define-data-var total-suppliers uint u0)
 
+
+(define-map warehouses
+    { warehouse-id: uint }
+    {
+        name: (string-ascii 50),
+        location: (string-ascii 100),
+        capacity: uint,
+        current-utilization: uint,
+        manager: principal,
+        active: bool
+    }
+)
+
+(define-map warehouse-inventory
+    { warehouse-id: uint, item-id: uint }
+    {
+        quantity: uint,
+        reserved-quantity: uint,
+        last-updated: uint
+    }
+)
+
+(define-map transfers
+    { transfer-id: uint }
+    {
+        item-id: uint,
+        from-warehouse: uint,
+        to-warehouse: uint,
+        quantity: uint,
+        status: (string-ascii 20),
+        initiated-by: principal,
+        initiated-at: uint,
+        completed-at: uint
+    }
+)
+
+(define-data-var warehouse-counter uint u0)
+(define-data-var transfer-counter uint u0)
+
 ;; Data Maps
 (define-map inventory
     { item-id: uint }
@@ -511,4 +550,186 @@
 
 (define-read-only (get-pending-reorders)
     (ok (var-get reorder-queue-counter))
+)
+
+
+(define-constant err-warehouse-not-found (err u200))
+(define-constant err-insufficient-warehouse-stock (err u201))
+(define-constant err-warehouse-capacity-exceeded (err u202))
+(define-constant err-same-warehouse-transfer (err u203))
+(define-constant err-transfer-not-found (err u204))
+
+(define-public (create-warehouse (name (string-ascii 50)) (location (string-ascii 100)) (capacity uint) (manager principal))
+    (let ((new-warehouse-id (+ (var-get warehouse-counter) u1)))
+        (asserts! (is-eq tx-sender contract-owner) err-not-authorized)
+        (map-set warehouses
+            { warehouse-id: new-warehouse-id }
+            {
+                name: name,
+                location: location,
+                capacity: capacity,
+                current-utilization: u0,
+                manager: manager,
+                active: true
+            }
+        )
+        (var-set warehouse-counter new-warehouse-id)
+        (ok new-warehouse-id)
+    )
+)
+
+(define-public (add-stock-to-warehouse (warehouse-id uint) (item-id uint) (quantity uint))
+    (let 
+        (
+            (warehouse (unwrap! (map-get? warehouses {warehouse-id: warehouse-id}) err-warehouse-not-found))
+            (current-stock (default-to 
+                { quantity: u0, reserved-quantity: u0, last-updated: u0 }
+                (map-get? warehouse-inventory {warehouse-id: warehouse-id, item-id: item-id})
+            ))
+        )
+        (asserts! (or (is-eq tx-sender contract-owner) (is-eq tx-sender (get manager warehouse))) err-not-authorized)
+        (asserts! (get active warehouse) err-warehouse-not-found)
+        (asserts! (<= (+ (get current-utilization warehouse) quantity) (get capacity warehouse)) err-warehouse-capacity-exceeded)
+        
+        (map-set warehouse-inventory
+            { warehouse-id: warehouse-id, item-id: item-id }
+            {
+                quantity: (+ (get quantity current-stock) quantity),
+                reserved-quantity: (get reserved-quantity current-stock),
+                last-updated: stacks-block-height
+            }
+        )
+        
+        (map-set warehouses
+            { warehouse-id: warehouse-id }
+            (merge warehouse {
+                current-utilization: (+ (get current-utilization warehouse) quantity)
+            })
+        )
+        (ok true)
+    )
+)
+
+(define-public (initiate-transfer (item-id uint) (from-warehouse uint) (to-warehouse uint) (quantity uint))
+    (let 
+        (
+            (new-transfer-id (+ (var-get transfer-counter) u1))
+            (from-wh (unwrap! (map-get? warehouses {warehouse-id: from-warehouse}) err-warehouse-not-found))
+            (to-wh (unwrap! (map-get? warehouses {warehouse-id: to-warehouse}) err-warehouse-not-found))
+            (from-stock (unwrap! (map-get? warehouse-inventory {warehouse-id: from-warehouse, item-id: item-id}) err-insufficient-warehouse-stock))
+        )
+        (asserts! (not (is-eq from-warehouse to-warehouse)) err-same-warehouse-transfer)
+        (asserts! (or (is-eq tx-sender contract-owner) (is-eq tx-sender (get manager from-wh))) err-not-authorized)
+        (asserts! (>= (get quantity from-stock) quantity) err-insufficient-warehouse-stock)
+        (asserts! (get active from-wh) err-warehouse-not-found)
+        (asserts! (get active to-wh) err-warehouse-not-found)
+        
+        (map-set warehouse-inventory
+            { warehouse-id: from-warehouse, item-id: item-id }
+            (merge from-stock {
+                quantity: (- (get quantity from-stock) quantity),
+                reserved-quantity: (+ (get reserved-quantity from-stock) quantity),
+                last-updated: stacks-block-height
+            })
+        )
+        
+        (map-set transfers
+            { transfer-id: new-transfer-id }
+            {
+                item-id: item-id,
+                from-warehouse: from-warehouse,
+                to-warehouse: to-warehouse,
+                quantity: quantity,
+                status: "in-transit",
+                initiated-by: tx-sender,
+                initiated-at: stacks-block-height,
+                completed-at: u0
+            }
+        )
+        
+        (var-set transfer-counter new-transfer-id)
+        (ok new-transfer-id)
+    )
+)
+
+(define-public (complete-transfer (transfer-id uint))
+    (let 
+        (
+            (transfer (unwrap! (map-get? transfers {transfer-id: transfer-id}) err-transfer-not-found))
+            (to-wh (unwrap! (map-get? warehouses {warehouse-id: (get to-warehouse transfer)}) err-warehouse-not-found))
+            (from-stock (unwrap! (map-get? warehouse-inventory {warehouse-id: (get from-warehouse transfer), item-id: (get item-id transfer)}) err-insufficient-warehouse-stock))
+            (to-stock (default-to 
+                { quantity: u0, reserved-quantity: u0, last-updated: u0 }
+                (map-get? warehouse-inventory {warehouse-id: (get to-warehouse transfer), item-id: (get item-id transfer)})
+            ))
+        )
+        (asserts! (or (is-eq tx-sender contract-owner) (is-eq tx-sender (get manager to-wh))) err-not-authorized)
+        (asserts! (is-eq (get status transfer) "in-transit") err-transfer-not-found)
+        
+        (map-set warehouse-inventory
+            { warehouse-id: (get from-warehouse transfer), item-id: (get item-id transfer) }
+            (merge from-stock {
+                reserved-quantity: (- (get reserved-quantity from-stock) (get quantity transfer)),
+                last-updated: stacks-block-height
+            })
+        )
+        
+        (map-set warehouse-inventory
+            { warehouse-id: (get to-warehouse transfer), item-id: (get item-id transfer) }
+            {
+                quantity: (+ (get quantity to-stock) (get quantity transfer)),
+                reserved-quantity: (get reserved-quantity to-stock),
+                last-updated: stacks-block-height
+            }
+        )
+        
+        (map-set transfers
+            { transfer-id: transfer-id }
+            (merge transfer {
+                status: "completed",
+                completed-at: stacks-block-height
+            })
+        )
+        (ok true)
+    )
+)
+
+(define-read-only (get-warehouse-stock (warehouse-id uint) (item-id uint))
+    (map-get? warehouse-inventory {warehouse-id: warehouse-id, item-id: item-id})
+)
+
+(define-read-only (get-warehouse-details (warehouse-id uint))
+    (map-get? warehouses {warehouse-id: warehouse-id})
+)
+
+(define-read-only (get-transfer-details (transfer-id uint))
+    (map-get? transfers {transfer-id: transfer-id})
+)
+
+(define-read-only (get-total-item-stock (item-id uint))
+    (let ((warehouse-count (var-get warehouse-counter)))
+        (fold calculate-total-stock (list u1 u2 u3 u4 u5 u6 u7 u8 u9 u10) { item-id: item-id, total: u0 })
+    )
+)
+
+(define-private (calculate-total-stock (warehouse-id uint) (acc { item-id: uint, total: uint }))
+    (let 
+        (
+            (stock (map-get? warehouse-inventory {warehouse-id: warehouse-id, item-id: (get item-id acc)}))
+        )
+        (match stock
+            stock-data { item-id: (get item-id acc), total: (+ (get total acc) (get quantity stock-data)) }
+            acc
+        )
+    )
+)
+
+(define-read-only (get-warehouse-utilization (warehouse-id uint))
+    (match (map-get? warehouses {warehouse-id: warehouse-id})
+        warehouse (if (> (get capacity warehouse) u0)
+            (/ (* (get current-utilization warehouse) u100) (get capacity warehouse))
+            u0
+        )
+        u0
+    )
 )
