@@ -9,6 +9,12 @@ requirements = []
 path = 'contracts/SmartInventory.clar'
 clarity_version = 3
 epoch = 3.1
+
+[contracts.ExpirationTracker]
+path = 'contracts/ExpirationTracker.clar'
+clarity_version = 3
+epoch = 3.1
+
 [repl.analysis]
 passes = ['check_checker']
 
